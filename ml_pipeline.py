@@ -25,11 +25,12 @@
 
 import random
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
+import joblib
 
 # ── Shared Constants (verbatim from README) ───────────────────────────────────
 N_SAMPLES       = 500
@@ -248,35 +249,59 @@ def generate_process_data(n_samples: int = N_SAMPLES, _debug: bool = True) -> pd
     return df[output_cols]
 
 
-def run_anomaly_detection(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def train_model(df: pd.DataFrame, **kwargs) -> IsolationForest:
     """
-    Fits an IsolationForest on FEATURE_COLUMNS of df.
+    Fits an IsolationForest on FEATURE_COLUMNS of df and returns the trained model.
+
+    Kwargs override the defaults (n_estimators=200, contamination=CONTAMINATION, …).
+    Useful for hyperparameter tuning without touching the source.
+    """
+    model = IsolationForest(
+        n_estimators=kwargs.get("n_estimators", 200),
+        contamination=kwargs.get("contamination", CONTAMINATION),
+        random_state=kwargs.get("random_state", 42),
+        max_samples=kwargs.get("max_samples", "auto"),
+        n_jobs=kwargs.get("n_jobs", -1),
+    )
+    model.fit(df[FEATURE_COLUMNS].values)
+    return model
+
+
+def save_model(model: IsolationForest, filepath: str = "model.pkl") -> str:
+    """Persist a trained IsolationForest to disk with joblib."""
+    joblib.dump(model, filepath)
+    return filepath
+
+
+def load_model(filepath: str = "model.pkl") -> IsolationForest:
+    """Load a previously saved IsolationForest from disk."""
+    return joblib.load(filepath)
+
+
+def run_anomaly_detection(
+    df: pd.DataFrame,
+    model: Optional[IsolationForest] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Scores df with an IsolationForest and appends anomaly columns.
+
+    If *model* is None, fits a fresh model via train_model() internally.
+    Pass a pre-trained model (loaded with load_model or obtained from
+    train_model) to skip retraining — useful after the first fit-and-save.
+
     Appends two columns to df:
         anomaly_score : float  (raw score from score_samples(); more negative = more anomalous)
         is_anomaly    : bool   (True for the contamination fraction)
-
-    n_estimators=200 (vs default 100) gives a smoother score surface, which
-    improves the ranking quality used by Team 3's top-N selection.
 
     Returns:
         (df_all, df_anomalies)
         df_all       : full DataFrame with appended anomaly columns
         df_anomalies : filtered subset where is_anomaly == True, index reset
     """
-    model = IsolationForest(
-        n_estimators=200,    # smoother score surface → better score ranking for Team 3
-        contamination=CONTAMINATION,
-        random_state=42,
-        max_samples="auto",  # auto = min(256, n_samples); sufficient for 500 rows
-        n_jobs=-1,           # parallelise tree fitting across cores
-    )
+    if model is None:
+        model = train_model(df)
 
     X = df[FEATURE_COLUMNS].values
-
-    # Single fit call; score_samples() and predict() share the same fitted state.
-    # The skeleton's double fit_predict() call was both wasteful and produced
-    # scores inconsistent with the is_anomaly flag.
-    model.fit(X)
 
     df = df.copy()
     df["anomaly_score"] = model.score_samples(X)   # continuous severity ranking
@@ -290,10 +315,19 @@ def run_anomaly_detection(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
 # Self-test entry point
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import sys
+    import os
 
+    # 1. Generate data + train fresh model + save to disk
+    print("=== Train & save model ===")
     df = generate_process_data(_debug=True)
-    df_all, df_anomalies = run_anomaly_detection(df)
+    model = train_model(df)
+    model_path = save_model(model, "model.pkl")
+    print(f"Model saved to {os.path.abspath(model_path)} ({os.path.getsize(model_path)/1024:.1f} KB)")
+    print()
+
+    # 2. Run detection with fresh model
+    print("=== Detection with fresh model ===")
+    df_all, df_anomalies = run_anomaly_detection(df, model=model)
     df_all["true_anomaly"] = df["anomaly_type"] != "normal"
 
     tp = (df_all["is_anomaly"] & df_all["true_anomaly"]).sum()
@@ -315,3 +349,11 @@ if __name__ == "__main__":
         n = (df["anomaly_type"] == atype).sum()
         caught = ((df["anomaly_type"] == atype) & df_all["is_anomaly"]).sum()
         print(f"  {atype:.<20s} {caught}/{n} ({caught/n:.0%})")
+    print()
+
+    # 3. Verify reloaded model produces identical results
+    print("=== Detection with reloaded model ===")
+    loaded = load_model("model.pkl")
+    df_reload, _ = run_anomaly_detection(df, model=loaded)
+    identical = (df_all["anomaly_score"] == df_reload["anomaly_score"]).all()
+    print(f"Scores identical after reload: {identical}")
