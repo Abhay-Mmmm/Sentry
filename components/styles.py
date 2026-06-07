@@ -18,10 +18,11 @@ def apply_custom_styles():
         }
 
         .main-header {
-            font-size: 2rem;
-            font-weight: 700;
+            font-size: 2.2rem;
+            font-weight: 800;
             color: #58A6FF;
             margin-bottom: 0.5rem;
+            text-shadow: 0 0 12px rgba(88, 166, 255, 0.12);
         }
 
         .sub-header {
@@ -31,17 +32,20 @@ def apply_custom_styles():
             margin-bottom: 2rem;
         }
 
-        .metric-card {
-            background-color: #161B22;
-            border: 1px solid #30363D;
-            border-radius: 12px;
-            padding: 1.25rem;
-            transition: all 0.3s ease;
+        /* Styling for st.metric container blocks into premium cards */
+        div[data-testid="metric-container"] {
+            background-color: #161B22 !important;
+            border: 1px solid #30363D !important;
+            border-radius: 10px !important;
+            padding: 1rem 1.25rem !important;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.25) !important;
+            transition: all 0.25s ease-in-out !important;
         }
 
-        .metric-card:hover {
-            border-color: #58A6FF;
-            transform: translateY(-2px);
+        div[data-testid="metric-container"]:hover {
+            border-color: #58A6FF !important;
+            box-shadow: 0 4px 15px rgba(88, 166, 255, 0.1) !important;
+            transform: translateY(-2px) !important;
         }
 
         .status-badge {
@@ -156,8 +160,9 @@ def apply_custom_styles():
             color: #F0F6FC;
         }
 
-        .sidebar .sidebar-content {
-            background-color: #161B22;
+        section[data-testid="stSidebar"] {
+            background-color: #0D1117 !important;
+            border-right: 1px solid #30363D !important;
         }
 
         ::-webkit-scrollbar {
