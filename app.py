@@ -5,8 +5,7 @@ import pandas as pd
 import numpy as np
 import requests
 import joblib
-from datetime import datetime, timedelta
-import random
+from ml_pipeline import generate_process_data as _generate_process_data
 
 # ── Shared Constants ──────────────────────────────────────────────────────────
 N_SAMPLES        = 500
@@ -15,45 +14,12 @@ OLLAMA_MODEL     = "gemma4:e4b"
 FEATURE_COLUMNS  = ["cpu_percent", "memory_mb", "net_bytes_sent", "disk_read_ops"]
 TOP_N_ANOMALIES  = 5
 MODEL_PATH       = "model.pkl"
-PROCESS_NAMES    = [
-    "chrome.exe", "python.exe", "node.exe", "svchost.exe",
-    "code.exe", "explorer.exe", "docker.exe", "git.exe"
-]
+PROCESS_NAMES = list(__import__('ml_pipeline').PROCESS_NAMES)
 
 
 # ── Team 2: Data Generation ───────────────────────────────────────────────────
 def generate_process_data(n_samples: int = N_SAMPLES) -> pd.DataFrame:
-    np.random.seed(42)
-    base_time = datetime.utcnow() - timedelta(minutes=n_samples)
-
-    records = []
-    for i in range(n_samples):
-        record = {
-            "timestamp":      base_time + timedelta(seconds=i * 6),
-            "process_name":   random.choice(PROCESS_NAMES),
-            "pid":            random.randint(100, 9999),
-            "cpu_percent":    float(np.clip(np.random.normal(loc=25, scale=15), 0, 85)),
-            "memory_mb":      float(np.clip(np.random.normal(loc=512, scale=200), 50, 3000)),
-            "net_bytes_sent": float(np.clip(np.random.exponential(scale=50000), 0, 800000)),
-            "disk_read_ops":  float(np.clip(np.random.normal(loc=50, scale=30), 0, 850)),
-        }
-        records.append(record)
-
-    # Inject anomalies into ~5% of rows
-    anomaly_indices = np.random.choice(n_samples, size=int(n_samples * 0.05), replace=False)
-    for idx in anomaly_indices:
-        anomaly_type = random.choice(["cpu_spike", "memory_leak", "net_silence", "disk_storm"])
-        if anomaly_type == "cpu_spike":
-            records[idx]["cpu_percent"] = float(np.random.uniform(90, 100))
-        elif anomaly_type == "memory_leak":
-            records[idx]["memory_mb"] = float(np.random.uniform(3500, 4096))
-        elif anomaly_type == "net_silence":
-            records[idx]["net_bytes_sent"] = 0.0
-            records[idx]["cpu_percent"] = float(np.random.uniform(88, 99))
-        elif anomaly_type == "disk_storm":
-            records[idx]["disk_read_ops"] = float(np.random.uniform(900, 1000))
-
-    return pd.DataFrame(records)
+    return _generate_process_data(n_samples=n_samples, _debug=False)
 
 
 # ── Team 2: Anomaly Detection with Pre-trained Model ──────────────────────────
