@@ -1,5 +1,7 @@
 # app.py — Project Sentinel
 
+import json
+import os
 import time
 from datetime import datetime, timezone
 
@@ -15,6 +17,19 @@ OLLAMA_MODEL    = "gemma4:e4b"
 FEATURE_COLUMNS = ["cpu_percent", "memory_mb", "net_bytes_sent", "disk_read_ops"]
 TOP_N_ANOMALIES = 5
 MODEL_PATH      = "model.pkl"
+WHITELIST_PATH  = "whitelist.json"
+
+
+def load_whitelist() -> set:
+    if os.path.exists(WHITELIST_PATH):
+        with open(WHITELIST_PATH) as f:
+            return set(json.load(f))
+    return set()
+
+
+def save_whitelist(wl: set) -> None:
+    with open(WHITELIST_PATH, "w") as f:
+        json.dump(sorted(wl), f, indent=2)
 
 
 def get_live_snapshot() -> pd.DataFrame:
@@ -60,11 +75,18 @@ def get_live_snapshot() -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def run_anomaly_detection(df: pd.DataFrame, model) -> tuple[pd.DataFrame, pd.DataFrame]:
+def run_anomaly_detection(df: pd.DataFrame, model, whitelist: set) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = df.copy()
     df["anomaly_score"] = model.score_samples(df[FEATURE_COLUMNS].values)
     df["is_anomaly"]    = model.predict(df[FEATURE_COLUMNS].values) == -1
-    return df, df[df["is_anomaly"]].reset_index(drop=True)
+    # status: "normal" | "anomaly" | "whitelisted"
+    df["status"] = df.apply(
+        lambda r: "whitelisted" if (r["is_anomaly"] and r["process_name"] in whitelist)
+                  else ("anomaly" if r["is_anomaly"] else "normal"),
+        axis=1,
+    )
+    df_anomalies = df[df["status"] == "anomaly"].reset_index(drop=True)
+    return df, df_anomalies
 
 
 def get_llm_explanation(df_anomalies: pd.DataFrame, df_all: pd.DataFrame) -> str:
@@ -109,12 +131,12 @@ html, body, [data-testid="stAppViewContainer"] {
 /* ── Title ── */
 h1 { 
     color: #58a6ff !important;
-    font-size: 2rem !important;
+    font-size: 2.4rem !important;
     letter-spacing: 0.04em;
     border-bottom: 2px solid #21262d;
     padding-bottom: 0.5rem;
 }
-h2, h3 { color: #79c0ff !important; }
+h2, h3 { color: #79c0ff !important; font-size: 1.3rem !important; }
 
 /* ── Metric cards ── */
 [data-testid="stMetric"] {
@@ -147,7 +169,7 @@ h2, h3 { color: #79c0ff !important; }
 [data-testid="stTabs"] button {
     color: #8b949e !important;
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 1rem;
 }
 [data-testid="stTabs"] button[aria-selected="true"] {
     color: #58a6ff !important;
@@ -164,7 +186,7 @@ iframe { background: #161b22 !important; }
     border: 1px solid #1f6feb !important;
     border-radius: 10px;
     color: #cdd9e5 !important;
-    font-size: 0.95rem;
+    font-size: 0.875rem;
     line-height: 1.7;
 }
 
@@ -223,10 +245,12 @@ def main():
         return
 
     # ── Snapshot once per session ─────────────────────────────────────────────
+    whitelist = load_whitelist()
+
     if "df_all" not in st.session_state:
         with st.spinner("📡 Taking live process snapshot (1s)..."):
             df_raw = get_live_snapshot()
-            df_all, df_anomalies = run_anomaly_detection(df_raw, model)
+            df_all, df_anomalies = run_anomaly_detection(df_raw, model, whitelist)
             st.session_state["df_all"] = df_all
             st.session_state["df_anomalies"] = df_anomalies
 
@@ -234,54 +258,60 @@ def main():
     df_anomalies = st.session_state["df_anomalies"]
 
     if st.button("🔄 Refresh Snapshot"):
-        del st.session_state["df_all"]
-        del st.session_state["df_anomalies"]
-        st.session_state.pop("llm_response", None)
+        for k in ["df_all", "df_anomalies", "llm_response"]:
+            st.session_state.pop(k, None)
         st.rerun()
 
     # ── Metrics row ───────────────────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
+    n_whitelisted = (df_all["status"] == "whitelisted").sum()
     anomaly_rate = len(df_anomalies) / len(df_all) * 100
     c1.metric("🖥️  Processes Monitored", len(df_all))
     c2.metric("🚨  Anomalies Detected",  len(df_anomalies))
     c3.metric("📊  Anomaly Rate",        f"{anomaly_rate:.1f}%",
               delta="above threshold" if anomaly_rate > 10 else "within normal range",
               delta_color="inverse" if anomaly_rate > 10 else "normal")
-    c4.metric("⚡  Avg CPU Usage",       f"{df_all['cpu_percent'].mean():.1f}%")
+    c4.metric("✅  Whitelisted",         n_whitelisted)
 
     st.divider()
 
     # ── Charts row ────────────────────────────────────────────────────────────
+    STATUS_COLORS = {"normal": "#3fb950", "anomaly": "#f85149", "whitelisted": "#e3b341"}
+
     col_pie, col_bar = st.columns(2)
 
     with col_pie:
-        pie_df = pd.DataFrame({
-            "Status": ["Normal", "Anomalous"],
-            "Count":  [len(df_all) - len(df_anomalies), len(df_anomalies)],
-        })
+        pie_counts = df_all["status"].value_counts().reset_index()
+        pie_counts.columns = ["Status", "Count"]
+        pie_counts["Status"] = pie_counts["Status"].map(
+            {"normal": "✓ Normal", "anomaly": "⚠ Anomaly", "whitelisted": "~ Whitelisted"})
         fig_pie = px.pie(
-            pie_df, names="Status", values="Count",
+            pie_counts, names="Status", values="Count",
             color="Status",
-            color_discrete_map={"Normal": "#3fb950", "Anomalous": "#f85149"},
+            color_discrete_map={"✓ Normal": "#3fb950", "⚠ Anomaly": "#f85149", "~ Whitelisted": "#e3b341"},
             title="Process Health Overview",
-            hole=0.5,
         )
         fig_pie.update_traces(
-            textinfo="label+percent+value",
-            textfont=dict(color="#e6edf3", size=13),
+            textinfo="label+percent",
+            textposition="outside",
+            textfont=dict(color="#e6edf3", size=11),
             marker=dict(line=dict(color="#0d1117", width=2)),
+            pull=0.02,
         )
-        fig_pie.update_layout(**CHART_THEME, showlegend=False)
+        fig_pie.update_layout(**CHART_THEME, showlegend=False,
+                              uniformtext_minsize=10, uniformtext_mode="hide")
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col_bar:
         top_cpu = df_all.nlargest(10, "cpu_percent").copy()
         top_cpu["label"] = top_cpu["process_name"] + "  (" + top_cpu["pid"].astype(str) + ")"
+        top_cpu["Status"] = top_cpu["status"].map(
+            {"normal": "✓ Normal", "anomaly": "⚠ Anomaly", "whitelisted": "~ Whitelisted"})
         fig_bar = px.bar(
             top_cpu, x="cpu_percent", y="label", orientation="h",
-            color="is_anomaly",
-            color_discrete_map={True: "#f85149", False: "#388bfd"},
-            labels={"cpu_percent": "CPU %", "label": "", "is_anomaly": "Anomaly"},
+            color="Status",
+            color_discrete_map={"✓ Normal": "#388bfd", "⚠ Anomaly": "#f85149", "~ Whitelisted": "#e3b341"},
+            labels={"cpu_percent": "CPU %", "label": "", "Status": ""},
             title="Top 10 Processes by CPU",
         )
         fig_bar.update_layout(**CHART_THEME)
@@ -289,11 +319,12 @@ def main():
         st.plotly_chart(fig_bar, use_container_width=True)
 
     # ── Scatter ───────────────────────────────────────────────────────────────
-    df_all["Status"] = df_all["is_anomaly"].map({True: "⚠ Anomalous", False: "✓ Normal"})
+    df_all["Status"] = df_all["status"].map(
+        {"normal": "✓ Normal", "anomaly": "⚠ Anomaly", "whitelisted": "~ Whitelisted"})
     fig_scatter = px.scatter(
         df_all, x="cpu_percent", y="memory_mb",
         color="Status",
-        color_discrete_map={"✓ Normal": "#3fb950", "⚠ Anomalous": "#f85149"},
+        color_discrete_map={"✓ Normal": "#3fb950", "⚠ Anomaly": "#f85149", "~ Whitelisted": "#e3b341"},
         hover_data=["process_name", "pid", "disk_read_ops", "net_bytes_sent", "anomaly_score"],
         labels={"cpu_percent": "CPU %", "memory_mb": "Memory (MB)", "Status": ""},
         title="CPU vs Memory (hover for details)",
@@ -306,25 +337,54 @@ def main():
     st.divider()
 
     # ── Tables ────────────────────────────────────────────────────────────────
-    tab1, tab2 = st.tabs(["🚨 Flagged Anomalies", "📋 All Processes"])
+    tab1, tab2, tab3 = st.tabs(["🚨 Flagged Anomalies", "📋 All Processes", "✅ Whitelist"])
 
     with tab1:
         st.markdown(f'<p class="section-label">Sorted by anomaly score · most severe first <span class="anomaly-count">{len(df_anomalies)} flagged</span></p>', unsafe_allow_html=True)
         display_cols = ["process_name", "pid", "cpu_percent", "memory_mb",
                         "net_bytes_sent", "disk_read_ops", "anomaly_score"]
-        st.dataframe(
-            df_anomalies[display_cols].sort_values("anomaly_score"),
-            use_container_width=True, hide_index=True,
-            column_config={
-                "process_name":  st.column_config.TextColumn("Process"),
-                "pid":           st.column_config.NumberColumn("PID", format="%d"),
-                "cpu_percent":   st.column_config.ProgressColumn("CPU %", min_value=0, max_value=100, format="%.1f%%"),
-                "memory_mb":     st.column_config.NumberColumn("Memory (MB)", format="%.1f"),
-                "net_bytes_sent":st.column_config.NumberColumn("Net Sent (B/s)", format="%.0f"),
-                "disk_read_ops": st.column_config.NumberColumn("Disk Reads/s", format="%.0f"),
-                "anomaly_score": st.column_config.NumberColumn("Anomaly Score", format="%.4f"),
-            },
-        )
+
+        if len(df_anomalies):
+            # Checklist: one checkbox per unique anomalous process name
+            st.markdown('<p class="section-label">Select processes to grant normal status</p>', unsafe_allow_html=True)
+            unique_anomalies = sorted(df_anomalies["process_name"].unique())
+            checked = []
+            cols = st.columns(min(3, len(unique_anomalies)))
+            for i, name in enumerate(unique_anomalies):
+                if cols[i % 3].checkbox(name, key=f"wl_{name}"):
+                    checked.append(name)
+
+            if checked:
+                if st.button(f"✅ Ignore {len(checked)} process(es) as anomalies", type="primary"):
+                    new_wl = whitelist | set(checked)
+                    save_whitelist(new_wl)
+                    for k in ["df_all", "df_anomalies"]:
+                        st.session_state.pop(k, None)
+                    st.success(f"Added to whitelist: {', '.join(checked)}. Refreshing...")
+                    st.rerun()
+
+            st.dataframe(
+                df_anomalies[display_cols].sort_values("anomaly_score"),
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "process_name":   st.column_config.TextColumn("Process"),
+                    "pid":            st.column_config.NumberColumn("PID", format="%d"),
+                    "cpu_percent":    st.column_config.ProgressColumn("CPU %", min_value=0, max_value=100, format="%.1f%%"),
+                    "memory_mb":      st.column_config.NumberColumn("Memory (MB)", format="%.1f"),
+                    "net_bytes_sent": st.column_config.NumberColumn("Net Sent (B/s)", format="%.0f"),
+                    "disk_read_ops":  st.column_config.NumberColumn("Disk Reads/s", format="%.0f"),
+                    "anomaly_score":  st.column_config.NumberColumn("Anomaly Score", format="%.4f"),
+                },
+            )
+        else:
+            st.success("🎉 No active anomalies detected.")
+
+        # Show whitelisted processes in this snapshot (yellow)
+        df_wl_snap = df_all[df_all["status"] == "whitelisted"]
+        if len(df_wl_snap):
+            st.markdown('<p class="section-label" style="color:#e3b341">~ whitelisted (ignored anomalies)</p>', unsafe_allow_html=True)
+            st.dataframe(df_wl_snap[display_cols].sort_values("anomaly_score"),
+                         use_container_width=True, hide_index=True)
 
     with tab2:
         st.markdown('<p class="section-label">All monitored processes · sorted by anomaly score</p>', unsafe_allow_html=True)
@@ -334,10 +394,28 @@ def main():
             column_config={
                 "cpu_percent":  st.column_config.ProgressColumn("CPU %", min_value=0, max_value=100, format="%.1f%%"),
                 "memory_mb":    st.column_config.NumberColumn("Memory (MB)", format="%.1f"),
-                "is_anomaly":   st.column_config.CheckboxColumn("Anomaly?"),
+                "status":       st.column_config.TextColumn("Status"),
                 "anomaly_score":st.column_config.NumberColumn("Score", format="%.4f"),
             },
         )
+
+    with tab3:
+        st.markdown('<p class="section-label">Processes permanently ignored as anomalies · persisted in whitelist.json</p>', unsafe_allow_html=True)
+        if whitelist:
+            to_remove = []
+            for name in sorted(whitelist):
+                col_a, col_b = st.columns([4, 1])
+                col_a.markdown(f"**{name}**")
+                if col_b.button("Remove", key=f"rm_{name}"):
+                    to_remove.append(name)
+            if to_remove:
+                new_wl = whitelist - set(to_remove)
+                save_whitelist(new_wl)
+                for k in ["df_all", "df_anomalies"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+        else:
+            st.info("Whitelist is empty. Check processes in the Flagged Anomalies tab and click Ignore.")
 
     st.divider()
 
