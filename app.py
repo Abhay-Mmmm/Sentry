@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-import pickle
+import joblib
 from datetime import datetime, timedelta
 import random
 
@@ -166,8 +166,7 @@ def main():
 
     # Load pre-trained model
     try:
-        with open(MODEL_PATH, "rb") as f:
-            model = pickle.load(f)
+        model = joblib.load(MODEL_PATH)
     except FileNotFoundError:
         st.error(f"Model file '{MODEL_PATH}' not found. Please ensure the Isolation Forest model is available.")
         return
