@@ -1,36 +1,49 @@
-# Python
+# ── Python ─────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 *.egg-info/
-dist/
 build/
 .eggs/
 
-# Virtual Environment
+# ── Virtual Environment ─────────────────────────────────────────────────────────
 .venv/
 venv/
 ENV/
 
-# Data
+# ── ML artifacts ───────────────────────────────────────────────────────────────
+# model.pkl is tracked so collaborators don't need to retrain from scratch.
+# Uncomment the next line if you want to exclude it (e.g. file too large for git):
+# *.pkl
+
+# ── Telemetry data (can be large) ──────────────────────────────────────────────
 data/live_data.json
+
+# ── User runtime files ─────────────────────────────────────────────────────────
 whitelist.json
 
-# IDE
+# ── Frontend — build output ────────────────────────────────────────────────────
+frontend/dist/
+frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
+
+# ── IDE ────────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
+# ── OS ─────────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Streamlit
+# ── Streamlit ──────────────────────────────────────────────────────────────────
 .streamlit/secrets.toml
 
-# Model files (optional - uncomment if you don't want to track)
-# *.pkl
+# ── Logs ───────────────────────────────────────────────────────────────────────
+*.log
+
+# ── Models ───────────────────────────────────────────────────────────────────────
 *.pkl
