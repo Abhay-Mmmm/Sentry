@@ -4,6 +4,8 @@
 
 A local-only endpoint security monitor that detects statistically anomalous process behaviour using an Isolation Forest model trained on your own system's baseline, then explains the findings in plain English using a locally hosted Gemma 4B LLM via Ollama.
 
+**Note:** `psutil` is cross-platform, so this tool works on Windows, macOS, and Linux. However, to get predictions and summaries, **you must train the model locally on your own machine** (Step 3 & 4) and **run your own local instance of Ollama** (Step 2). There is no pre-trained model included, as anomalies are specific to your system's normal behaviour.
+
 ---
 
 ## Architecture
@@ -33,20 +35,27 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Pull the LLM model
+### 2. Pull the LLM model (Local Summaries)
+
+To generate human-readable summaries of the anomalies, you need a local LLM.
 
 ```bash
 # Install Ollama first: https://ollama.com/download
+# Then, pull the model (this will run locally on your hardware):
 ollama pull gemma4:e4b
 ```
 
 ### 3. Collect baseline telemetry (~2 minutes)
 
+Because every system is different, you must collect data to establish **your** system's normal baseline.
+
 ```bash
 python collect_data.py
 ```
 
-### 4. Train the model
+### 4. Train the model (Local Predictions)
+
+Train the Isolation Forest model on the data you just collected. This generates `model.pkl` on your machine, enabling anomaly predictions.
 
 ```bash
 python ml_pipeline.py
